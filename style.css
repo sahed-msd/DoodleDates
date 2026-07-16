@@ -83,6 +83,32 @@ button{ font-family: inherit; }
   max-width: 440px;
 }
 
+/* Legend key explaining the holiday / weekly-off highlight colors */
+.legend{
+  display: flex;
+  justify-content: center;
+  gap: 20px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+.legend-item{
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+}
+.legend-dot{
+  width: 10px; height: 10px;
+  border-radius: 3px;
+  display: inline-block;
+  flex: none;
+}
+.legend-dot--holiday{ background: var(--accent-rose); }
+.legend-dot--bandh{ background: var(--accent-teal); }
+
 .home-grid{
   display: grid;
   grid-template-columns: repeat(4, minmax(0,1fr));
@@ -153,6 +179,19 @@ button{ font-family: inherit; }
   border-radius: 4px;
 }
 .mini-day.blank{ visibility: hidden; }
+
+/* Government holiday — rose ink, always visible even under the month-card's
+   busier paper texture */
+.mini-day.holiday{
+  background: rgba(139, 58, 58, 0.16);
+  color: var(--accent-rose);
+  font-weight: 700;
+}
+/* Weekly off (Bandh): Friday & Saturday in Bangladesh */
+.mini-day.weekly-bandh{
+  background: rgba(47, 111, 98, 0.12);
+  color: #3c6a5e;
+}
 .mini-day.today{
   background: var(--accent-brass);
   color: var(--ink-navy);
@@ -287,13 +326,39 @@ button{ font-family: inherit; }
 }
 .cg-cell:nth-child(7n+1){ border-left: none; }
 .cg-cell.blank{ background: repeating-linear-gradient(135deg, rgba(0,0,0,0.015) 0 10px, transparent 10px 20px); }
+
+/* Government holiday cell — tinted rose, with the holiday name printed
+   in the corner so it reads at a glance without needing to hover */
+.cg-cell.holiday{ background: rgba(139, 58, 58, 0.09); }
+.cg-cell.holiday .cg-daynum{ color: var(--accent-rose); font-weight: 700; }
+
+/* Weekly off (Bandh): Friday & Saturday */
+.cg-cell.weekly-bandh{ background: rgba(47, 111, 98, 0.07); }
+.cg-cell.weekly-bandh .cg-daynum{ color: var(--accent-teal); }
+
 .cg-daynum{
   position: absolute; top: 6px; right: 8px;
   font-family: var(--font-mono);
   font-size: clamp(10px, 1.3vw, 14px);
   color: #6b6555;
+  z-index: 1; /* stay above hand-drawn ink beneath, on the base layer itself */
 }
-.cg-daynum.today{ color: var(--accent-teal); font-weight: 700; }
+.cg-daynum.today{ color: var(--accent-brass); font-weight: 700; }
+
+/* Holiday / Bandh name printed along the bottom edge of the date cell */
+.cg-holiday-label{
+  position: absolute;
+  left: 5px; right: 5px; bottom: 4px;
+  font-family: var(--font-mono);
+  font-size: clamp(7.5px, 0.9vw, 9.5px);
+  line-height: 1.15;
+  color: var(--accent-rose);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+.cg-bandh-label{ color: var(--accent-teal); }
 
 .draw-canvas{
   position: absolute; inset: 0;

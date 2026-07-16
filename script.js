@@ -58,6 +58,53 @@
     return t.getFullYear() === YEAR && t.getMonth() === m && t.getDate() === d;
   };
 
+  /* ----------------------------------------------------------------------
+   * BANGLADESH 2026 GOVERNMENT HOLIDAYS
+   * Official General/Executive-Order holiday list (month index is 0-based).
+   * Islamic dates (Shab-e-Barat, Laylat al-Qadr, Eid-ul-Fitr, Eid-ul-Azha,
+   * Ashura, Eid-e-Milad-un-Nabi) follow the lunar Hijri calendar and are
+   * subject to moon sighting — the government may shift these by ±1 day
+   * closer to the date; that's noted on the highlighted cell itself.
+   * -------------------------------------------------------------------- */
+  const BD_HOLIDAYS_2026 = [
+    { m: 1,  d: 4,  name: "Shab-e-Barat", moon: true },
+    { m: 1,  d: 21, name: "Shaheed Day / Int'l Mother Language Day" },
+    { m: 2,  d: 17, name: "Sheikh Mujibur Rahman's Birthday" },
+    { m: 2,  d: 18, name: "Laylat al-Qadr", moon: true },
+    { m: 2,  d: 19, name: "Eid-ul-Fitr Holiday", moon: true },
+    { m: 2,  d: 20, name: "Jumatul Wida / Eid Holiday", moon: true },
+    { m: 2,  d: 21, name: "Eid-ul-Fitr", moon: true },
+    { m: 2,  d: 22, name: "Eid-ul-Fitr Holiday", moon: true },
+    { m: 2,  d: 23, name: "Eid-ul-Fitr Holiday", moon: true },
+    { m: 2,  d: 26, name: "Independence Day" },
+    { m: 3,  d: 14, name: "Pohela Boishakh (Bengali New Year)" },
+    { m: 4,  d: 1,  name: "May Day / Buddha Purnima" },
+    { m: 4,  d: 26, name: "Eid-ul-Azha Holiday", moon: true },
+    { m: 4,  d: 27, name: "Eid-ul-Azha", moon: true },
+    { m: 4,  d: 28, name: "Eid-ul-Azha Holiday", moon: true },
+    { m: 4,  d: 29, name: "Eid-ul-Azha Holiday", moon: true },
+    { m: 4,  d: 30, name: "Eid-ul-Azha Holiday", moon: true },
+    { m: 4,  d: 31, name: "Eid-ul-Azha Holiday", moon: true },
+    { m: 5,  d: 26, name: "Ashura", moon: true },
+    { m: 7,  d: 5,  name: "July Mass Uprising Day" },
+    { m: 7,  d: 15, name: "National Mourning Day" },
+    { m: 7,  d: 26, name: "Eid-e-Milad-un-Nabi", moon: true },
+    { m: 9,  d: 20, name: "Durga Puja (Maha Navami)" },
+    { m: 9,  d: 21, name: "Vijaya Dashami" },
+    { m: 11, d: 16, name: "Victory Day" },
+    { m: 11, d: 25, name: "Christmas Day" },
+  ];
+  // Fast lookup: "m-d" -> holiday record
+  const HOLIDAY_MAP = new Map(BD_HOLIDAYS_2026.map(h => [`${h.m}-${h.d}`, h]));
+  const getHoliday = (m, d) => HOLIDAY_MAP.get(`${m}-${d}`) || null;
+
+  /** Weekly off ("Bandh") days — Bangladesh's government weekend is
+   *  Friday & Saturday (not Sat/Sun). */
+  const isWeeklyBandh = (m, d) => {
+    const dow = new Date(YEAR, m, d).getDay();
+    return dow === 5 || dow === 6; // Fri = 5, Sat = 6
+  };
+
   /* ------------------------------------------------------------------ *
    * 2. STORAGE — lightweight IndexedDB wrapper
    * ------------------------------------------------------------------ */
@@ -201,8 +248,15 @@
         if (day === null) {
           cell.className = "mini-day blank";
         } else {
-          cell.className = "mini-day" + (isToday(m, day) ? " today" : "");
+          const holiday = getHoliday(m, day);
+          const classes = ["mini-day"];
+          if (holiday) classes.push("holiday");
+          else if (isWeeklyBandh(m, day)) classes.push("weekly-bandh");
+          if (isToday(m, day)) classes.push("today");
+          cell.className = classes.join(" ");
           cell.textContent = day;
+          if (holiday) cell.title = holiday.name + (holiday.moon ? " (date may shift by moon sighting)" : "");
+          else if (isWeeklyBandh(m, day)) cell.title = "Weekly off (Bandh)";
         }
         mini.appendChild(cell);
       });
@@ -269,12 +323,38 @@
       weekEl.className = "cg-week";
       week.forEach(day => {
         const cell = document.createElement("div");
-        cell.className = "cg-cell" + (day === null ? " blank" : "");
+        const cellClasses = ["cg-cell"];
+        if (day === null) {
+          cellClasses.push("blank");
+        } else {
+          const holiday = getHoliday(m, day);
+          if (holiday) {
+            cellClasses.push("holiday");
+            cell.title = holiday.name + (holiday.moon ? " (date may shift by moon sighting)" : "");
+          } else if (isWeeklyBandh(m, day)) {
+            cellClasses.push("weekly-bandh");
+            cell.title = "Weekly off (Bandh)";
+          }
+        }
+        cell.className = cellClasses.join(" ");
         if (day !== null) {
           const num = document.createElement("span");
           num.className = "cg-daynum" + (isToday(m, day) ? " today" : "");
           num.textContent = day;
           cell.appendChild(num);
+
+          const holiday = getHoliday(m, day);
+          if (holiday) {
+            const label = document.createElement("span");
+            label.className = "cg-holiday-label";
+            label.textContent = holiday.name;
+            cell.appendChild(label);
+          } else if (isWeeklyBandh(m, day)) {
+            const label = document.createElement("span");
+            label.className = "cg-holiday-label cg-bandh-label";
+            label.textContent = "Bandh";
+            cell.appendChild(label);
+          }
         }
         weekEl.appendChild(cell);
       });
