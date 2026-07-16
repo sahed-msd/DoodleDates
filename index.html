@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>2026 — Digital Canvas Diary</title>
+
+<!-- Fonts: Fraunces (display serif, characterful) / Inter (UI) / JetBrains Mono (dates & data) -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,500;0,9..144,600;1,9..144,500&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- Paper grain overlay, purely decorative, sits above everything at low opacity -->
+<div class="grain" aria-hidden="true"></div>
+
+<div id="app">
+
+  <!-- ============================= HOME VIEW ============================= -->
+  <!-- All-in-one dashboard: 12-month overview grid -->
+  <header class="home-header">
+    <p class="eyebrow">A YEAR, KEPT BY HAND</p>
+    <h1 class="year-title">2026</h1>
+    <p class="home-sub">Tap a month to open its page. Draw, write, leave it exactly as you left it.</p>
+  </header>
+
+  <main id="homeView" class="home-grid" aria-label="Months of 2026"></main>
+
+  <!-- ============================ WORKSPACE VIEW =========================== -->
+  <!-- Deep-dive full-screen canvas workspace for a single month -->
+  <section id="workspaceView" class="workspace" aria-hidden="true">
+
+    <div class="workspace-inner">
+      <header class="workspace-header">
+        <div class="binder" aria-hidden="true">
+          <span class="ring"></span><span class="ring"></span><span class="ring"></span>
+          <span class="ring"></span><span class="ring"></span><span class="ring"></span>
+        </div>
+        <h2 id="workspaceTitle" class="workspace-title">Month 2026</h2>
+        <p class="workspace-hint">Write or draw anywhere on the page — between dates, over them, in the margins.</p>
+      </header>
+
+      <!-- The canvas stack: calendar grid (base) + drawing canvas + text notes, all perfectly aligned -->
+      <div id="canvasWrap" class="canvas-wrap">
+        <div id="calendarGrid" class="calendar-grid" aria-hidden="true"></div>
+        <canvas id="drawCanvas" class="draw-canvas"></canvas>
+        <div id="notesLayer" class="notes-layer"></div>
+      </div>
+    </div>
+
+    <!-- ========================= FLOATING COMMAND PALETTE ======================== -->
+    <div class="toolbar glass" id="toolbar" role="toolbar" aria-label="Drawing tools">
+
+      <button class="tool-btn back-btn" id="backBtn" title="Back to overview">
+        <svg viewBox="0 0 24 24" width="18" height="18"><path d="M15 18l-6-6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Overview</span>
+      </button>
+
+      <div class="tool-sep"></div>
+
+      <div class="mode-group" id="modeGroup">
+        <button class="tool-btn mode-btn active" data-mode="pen" title="Pen — free-hand ink">
+          <svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 19l7-7 3 3-7 7-3-3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M18 13l-1.5-1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M2 21l3.5-1 8-8-2.5-2.5-8 8-1 3.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+          <span>Pen</span>
+        </button>
+        <button class="tool-btn mode-btn" data-mode="text" title="Text note — click to place">
+          <svg viewBox="0 0 24 24" width="18" height="18"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M7 9h10M7 13h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <span>Note</span>
+        </button>
+        <button class="tool-btn mode-btn" data-mode="erase" title="Eraser">
+          <svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 16l8-8 6 6-6 6H8l-4-4z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M8 20h11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <span>Erase</span>
+        </button>
+      </div>
+
+      <div class="tool-sep"></div>
+
+      <div class="palette-group" id="paletteGroup" title="Ink color">
+        <!-- swatches injected by JS -->
+      </div>
+
+      <div class="tool-sep"></div>
+
+      <div class="thickness-group">
+        <svg viewBox="0 0 24 24" width="14" height="14" class="thickness-icon"><circle cx="12" cy="12" r="2.4" fill="currentColor"/></svg>
+        <input type="range" id="thicknessSlider" min="1" max="18" value="3" title="Stroke thickness">
+        <svg viewBox="0 0 24 24" width="20" height="20" class="thickness-icon"><circle cx="12" cy="12" r="7" fill="currentColor"/></svg>
+      </div>
+
+      <div class="tool-sep"></div>
+
+      <button class="tool-btn" id="clearBtn" title="Clear this month's page">
+        <svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Clear</span>
+      </button>
+
+      <span class="save-indicator" id="saveIndicator" aria-live="polite">Saved</span>
+    </div>
+  </section>
+
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
