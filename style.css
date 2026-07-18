@@ -109,6 +109,54 @@ button{ font-family: inherit; }
 .legend-dot--holiday{ background: var(--accent-rose); }
 .legend-dot--bandh{ background: var(--accent-teal); }
 
+/* Export / Import backup controls */
+.backup-controls{
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 20px;
+  flex-wrap: wrap;
+}
+.ghost-btn{
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: rgba(237, 231, 218, 0.06);
+  border: 1px solid rgba(237, 231, 218, 0.18);
+  color: var(--text-cream);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  font-weight: 500;
+  padding: 8px 16px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease, transform 0.1s ease;
+}
+.ghost-btn:hover{ background: rgba(237, 231, 218, 0.12); border-color: rgba(237, 231, 218, 0.32); }
+.ghost-btn:active{ transform: scale(0.97); }
+.ghost-btn svg{ flex: none; opacity: 0.85; }
+
+/* Storage-almost-full warning banner */
+.storage-warning{
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  max-width: 520px;
+  margin: 18px auto 0;
+  padding: 10px 16px;
+  border-radius: var(--radius-sm);
+  background: rgba(139, 58, 58, 0.16);
+  border: 1px solid rgba(139, 58, 58, 0.4);
+  color: #e8c9c9;
+  font-size: 12.5px;
+}
+.storage-warning button{
+  background: none; border: none; color: inherit;
+  font-size: 16px; line-height: 1; cursor: pointer; opacity: 0.75; flex: none;
+}
+.storage-warning button:hover{ opacity: 1; }
+
 .home-grid{
   display: grid;
   grid-template-columns: repeat(4, minmax(0,1fr));
@@ -378,14 +426,18 @@ button{ font-family: inherit; }
 /* Sticky text note */
 .sticky-note{
   position: absolute;
+  display: flex;
+  flex-direction: column;
   min-width: 120px;
-  max-width: 46%;
+  min-height: 44px;
+  max-width: 90%;
+  max-height: 80%;
   pointer-events: auto;
   background: rgba(255, 250, 230, 0.92);
   border: 1px solid rgba(0,0,0,0.08);
   border-left: 3px solid var(--accent-brass);
   border-radius: 4px 8px 8px 4px;
-  padding: 8px 22px 8px 10px;
+  padding: 8px 20px 10px 10px;
   font-family: var(--font-ui);
   font-size: 13.5px;
   line-height: 1.4;
@@ -393,17 +445,22 @@ button{ font-family: inherit; }
   box-shadow: 0 6px 16px -8px rgba(0,0,0,0.4);
   cursor: grab;
   outline: none;
+  overflow: hidden;
 }
 .sticky-note:focus-within{
   box-shadow: 0 10px 22px -8px rgba(0,0,0,0.5);
   border-left-color: var(--accent-teal);
 }
-.sticky-note.dragging{ cursor: grabbing; opacity: 0.85; z-index: 10; }
+.sticky-note.dragging{ cursor: grabbing; opacity: 0.85; }
+
 .sticky-note .note-text{
   outline: none;
   white-space: pre-wrap;
   word-break: break-word;
   min-height: 1.2em;
+  flex: 1;
+  overflow-y: auto;
+  cursor: text;
 }
 .sticky-note .note-text:empty:before{
   content: "Write here…";
@@ -415,8 +472,75 @@ button{ font-family: inherit; }
   border: none; background: none; cursor: pointer;
   color: #b08a8a; font-size: 14px; line-height: 1;
   opacity: 0.6;
+  z-index: 2;
 }
 .sticky-note .note-del:hover{ opacity: 1; color: var(--accent-rose); }
+
+/* Formatting toolbar — lives *inside* the note's own box (not floated
+   outside it) so it's never clipped by the canvas-wrap's overflow:hidden.
+   Collapsed to zero height until the note is focused. */
+.note-toolbar{
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px;
+  max-height: 0;
+  overflow: hidden;
+  padding-right: 16px;
+  transition: max-height 0.18s ease, margin-bottom 0.18s ease;
+}
+.sticky-note.note-active .note-toolbar{
+  max-height: 110px;
+  margin-bottom: 6px;
+}
+.note-tool-btn{
+  min-width: 20px; height: 20px;
+  padding: 0 4px;
+  border: none;
+  border-radius: 5px;
+  background: rgba(0,0,0,0.06);
+  color: var(--text-ink);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+.note-tool-btn:hover{ background: rgba(0,0,0,0.12); }
+.note-tool-sep{ width: 1px; height: 16px; background: rgba(0,0,0,0.12); flex: none; margin: 0 1px; }
+
+.note-swatch{
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(0,0,0,0.15);
+  cursor: pointer;
+  flex: none;
+  padding: 0;
+}
+.note-swatch:hover{ transform: scale(1.15); }
+.note-swatch--highlight{ border-radius: 4px; }
+.note-swatch--clear{
+  background-image: linear-gradient(45deg, transparent 45%, #c0392b 45%, #c0392b 55%, transparent 55%);
+  border-color: rgba(0,0,0,0.25);
+}
+.note-swatch--paper{ border-radius: 4px; width: 15px; height: 15px; }
+
+/* Resize handle — bottom-right corner grip */
+.note-resize-handle{
+  position: absolute;
+  right: 2px; bottom: 2px;
+  width: 14px; height: 14px;
+  cursor: nwse-resize;
+  background-image: repeating-linear-gradient(
+    135deg,
+    rgba(0,0,0,0.32) 0 1.5px,
+    transparent 1.5px 4px
+  );
+  background-position: bottom right;
+  background-repeat: no-repeat;
+  background-size: 10px 10px;
+  z-index: 2;
+  opacity: 0.55;
+}
+.note-resize-handle:hover{ opacity: 1; }
 
 /* ==========================================================================
    FLOATING COMMAND PALETTE (glassmorphism toolbar)
@@ -456,6 +580,8 @@ button{ font-family: inherit; }
 .tool-btn:hover{ background: rgba(255,255,255,0.08); }
 .tool-btn:active{ transform: scale(0.94); }
 .tool-btn.active{ background: var(--accent-brass); color: var(--ink-navy-2); }
+.tool-btn:disabled{ opacity: 0.32; cursor: not-allowed; }
+.tool-btn:disabled:hover{ background: none; }
 
 .mode-group{ display: flex; gap: 4px; flex: none; }
 

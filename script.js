@@ -12,8 +12,11 @@
      6. DRAWING LAYER — HTML5 Canvas, pointer events, vector stroke storage
      7. TEXT NOTE LAYER — DOM sticky notes, draggable & editable
      8. TOOLBAR — mode / color / thickness controls
-     9. AUTO-SAVE — debounced + event-driven persistence
-     10. INIT
+     9. HISTORY — per-month undo / redo (snapshot-based)
+     10. AUTO-SAVE — debounced + event-driven persistence
+     11. EXPORT / IMPORT — whole-year JSON backup & restore
+     12. STORAGE HEALTH — persistent-storage request + quota warning
+     13. INIT
    ========================================================================== */
 
 (() => {
@@ -373,6 +376,8 @@
     monthState = saved && typeof saved === "object"
       ? { strokes: saved.strokes || [], notes: saved.notes || [] }
       : { strokes: [], notes: [] };
+    resetHistory(); // undo/redo history is per-month and in-memory only
+    checkStorageHealth();
 
     workspaceView.classList.add("open");
     workspaceView.setAttribute("aria-hidden", "false");
@@ -507,6 +512,8 @@
     drawingPointerId = e.pointerId;
     drawCanvas.setPointerCapture(e.pointerId);
 
+    pushHistorySnapshot(); // record state as it was *before* this stroke
+
     activeStroke = {
       id: uid(),
       type: currentMode === "erase" ? "erase" : "pen",
@@ -521,13 +528,38 @@
     e.preventDefault();
   }
 
+  /** Draws only the newest segment of the *currently active* stroke,
+   *  without clearing the canvas first. This is what pointermove uses —
+   *  drawing on top of the existing pixels is correct for both ink
+   *  (source-over) and the eraser (destination-out erases whatever is
+   *  already on the canvas right now), and is dramatically cheaper than
+   *  replaying every stroke on every mouse-move for a page with a lot of
+   *  ink on it. Full replay via redrawCanvas() is reserved for cases where
+   *  the canvas content actually needs to be rebuilt from scratch: initial
+   *  load, resize, undo/redo, and Clear. */
+  function drawActiveSegmentIncremental(stroke, cssW, cssH) {
+    const pts = stroke.points;
+    if (pts.length < 2) return;
+    const p1 = pts[pts.length - 2], p2 = pts[pts.length - 1];
+    const pressure = (p1.p + p2.p) / 2;
+    ctx.save();
+    ctx.globalCompositeOperation = stroke.type === "erase" ? "destination-out" : "source-over";
+    ctx.strokeStyle = stroke.color;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.lineWidth = Math.max(stroke.width * (0.55 + pressure * 0.9), 0.6);
+    ctx.beginPath();
+    ctx.moveTo(p1.x * cssW, p1.y * cssH);
+    ctx.lineTo(p2.x * cssW, p2.y * cssH);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   function pointerMoveOnCanvas(e) {
     if (activeStroke === null || e.pointerId !== drawingPointerId) return;
     activeStroke.points.push(relPointFromEvent(e));
-    // Redraw just enough: full clear+replay keeps erase compositing correct
-    // (destination-out must see everything beneath it, including this month's
-    // earlier strokes) while staying cheap for typical diary-length pages.
-    redrawCanvas();
+    const rect = canvasWrap.getBoundingClientRect();
+    drawActiveSegmentIncremental(activeStroke, rect.width, rect.height);
     e.preventDefault();
   }
 
@@ -550,14 +582,85 @@
    *    Notes are positioned with left/top in PERCENT of the wrap, so they
    *    stay pixel-perfectly aligned with the calendar/canvas beneath them
    *    on any viewport size without any JS repositioning on resize.
+   *
+   *    Each note now supports:
+   *      - Resizing (drag the corner handle) — stored as widthPx/heightPx
+   *      - Rich formatting — bold / italic / underline / highlight /
+   *        text color, applied via a small floating toolbar that appears
+   *        while the note is focused
+   *      - A paper color for the note itself, independent of ink color
+   *      - Adjustable font size
+   *    Formatted content is stored as sanitized HTML (note.html) rather
+   *    than plain text so formatting survives save/reload.
    * ------------------------------------------------------------------ */
+
+  const NOTE_HIGHLIGHTS = ["#FFF3A0", "#B7E3D8", "#F6C6C6", "none"];
+  const NOTE_PAPERS = [
+    { name: "Cream",  value: "rgba(255, 250, 230, 0.92)" },
+    { name: "Blush",  value: "rgba(248, 226, 221, 0.92)" },
+    { name: "Mint",   value: "rgba(220, 238, 227, 0.92)" },
+    { name: "Sky",    value: "rgba(220, 232, 245, 0.92)" },
+    { name: "Sand",   value: "rgba(238, 230, 210, 0.92)" },
+  ];
+  const FONT_SIZE_MIN = 11, FONT_SIZE_MAX = 22, FONT_SIZE_DEFAULT = 13.5;
+  let noteZCounter = 1; // transient stacking order, not persisted
+
+  /** Whitelist-based HTML sanitizer for note content. Runs on every note
+   *  before it's written into the DOM via innerHTML — including notes
+   *  loaded from a *.json backup import, which is untrusted input. Only a
+   *  small set of formatting tags/styles survive; everything else
+   *  (scripts, event handler attributes, foreign tags) is stripped or
+   *  unwrapped rather than dropped, so legitimate text is never lost. */
+  function sanitizeNoteHtml(html) {
+    const ALLOWED_TAGS = new Set(["B", "STRONG", "I", "EM", "U", "SPAN", "BR", "DIV"]);
+    const ALLOWED_STYLES = new Set(["color", "background-color", "font-weight", "font-style", "text-decoration"]);
+    const tpl = document.createElement("template");
+    tpl.innerHTML = String(html || "");
+
+    const clean = (parent) => {
+      Array.from(parent.childNodes).forEach(node => {
+        if (node.nodeType === Node.ELEMENT_NODE) {
+          if (!ALLOWED_TAGS.has(node.tagName)) {
+            // Unwrap disallowed elements instead of deleting their text
+            while (node.firstChild) node.parentNode.insertBefore(node.firstChild, node);
+            node.parentNode.removeChild(node);
+            return;
+          }
+          const style = node.getAttribute("style");
+          Array.from(node.attributes).forEach(attr => node.removeAttribute(attr.name));
+          if (style) {
+            const kept = style.split(";")
+              .map(s => s.trim()).filter(Boolean)
+              .filter(rule => ALLOWED_STYLES.has(rule.split(":")[0].trim().toLowerCase()));
+            if (kept.length) node.setAttribute("style", kept.join("; "));
+          }
+          clean(node);
+        } else if (node.nodeType !== Node.TEXT_NODE) {
+          node.remove(); // strip comments and anything else
+        }
+      });
+    };
+    clean(tpl.content);
+    return tpl.innerHTML;
+  }
+
   function createNoteElement(note) {
+    // Backfill defaults for notes saved before these fields existed
+    note.html = note.html != null ? note.html : escapeHtml(note.text || "");
+    note.bg = note.bg || NOTE_PAPERS[0].value;
+    note.fontSize = note.fontSize || FONT_SIZE_DEFAULT;
+    note.heightPx = note.heightPx || null; // null = auto-grow with content
+
     const el = document.createElement("div");
     el.className = "sticky-note";
     el.style.left = `${note.xPct}%`;
     el.style.top = `${note.yPct}%`;
-    if (note.widthPx) el.style.width = `${note.widthPx}px`;
+    el.style.width = `${note.widthPx || 180}px`;
+    if (note.heightPx) el.style.height = `${note.heightPx}px`;
+    el.style.background = note.bg;
     el.dataset.id = note.id;
+
+    const bringToFront = () => { el.style.zIndex = String(++noteZCounter); };
 
     const del = document.createElement("button");
     del.className = "note-del";
@@ -566,32 +669,143 @@
     del.textContent = "×";
     del.addEventListener("click", (ev) => {
       ev.stopPropagation();
+      pushHistorySnapshot();
       monthState.notes = monthState.notes.filter(n => n.id !== note.id);
       el.remove();
       scheduleSave();
     });
     el.appendChild(del);
 
+    /* ---- Floating formatting toolbar (shown while the note is active) --- */
+    const toolbar = document.createElement("div");
+    toolbar.className = "note-toolbar";
+
+    const runCmd = (cmd, val) => {
+      text.focus();
+      try { document.execCommand(cmd, false, val); } catch (_) { /* unsupported in this browser, ignore */ }
+      note.html = sanitizeNoteHtml(text.innerHTML);
+      scheduleSave();
+    };
+    const mkToolBtn = (label, title, onClick, extraClass) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "note-tool-btn" + (extraClass ? ` ${extraClass}` : "");
+      b.title = title;
+      b.innerHTML = label;
+      // mousedown (not click) + preventDefault keeps the text selection
+      // alive — a normal click would blur the contentEditable first.
+      b.addEventListener("mousedown", (ev) => ev.preventDefault());
+      b.addEventListener("click", (ev) => { ev.stopPropagation(); onClick(); });
+      return b;
+    };
+
+    toolbar.appendChild(mkToolBtn("<b>B</b>", "Bold", () => runCmd("bold")));
+    toolbar.appendChild(mkToolBtn("<i>I</i>", "Italic", () => runCmd("italic")));
+    toolbar.appendChild(mkToolBtn("<u>U</u>", "Underline", () => runCmd("underline")));
+
+    const sep1 = document.createElement("span"); sep1.className = "note-tool-sep"; toolbar.appendChild(sep1);
+
+    // Text (ink) color swatches — reuses the diary's ink palette
+    INK_COLORS.forEach(c => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "note-swatch";
+      b.style.background = c.value;
+      b.title = `Text color: ${c.name}`;
+      b.addEventListener("mousedown", (ev) => ev.preventDefault());
+      b.addEventListener("click", (ev) => { ev.stopPropagation(); runCmd("foreColor", c.value); });
+      toolbar.appendChild(b);
+    });
+
+    const sep2 = document.createElement("span"); sep2.className = "note-tool-sep"; toolbar.appendChild(sep2);
+
+    // Highlight swatches (last one clears highlighting)
+    NOTE_HIGHLIGHTS.forEach(hc => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "note-swatch note-swatch--highlight" + (hc === "none" ? " note-swatch--clear" : "");
+      b.style.background = hc === "none" ? "transparent" : hc;
+      b.title = hc === "none" ? "Clear highlight" : "Highlight text";
+      b.addEventListener("mousedown", (ev) => ev.preventDefault());
+      b.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        text.focus();
+        try { document.execCommand("hiliteColor", false, hc === "none" ? "transparent" : hc); }
+        catch (_) { try { document.execCommand("backColor", false, hc === "none" ? "transparent" : hc); } catch (__) {} }
+        note.html = sanitizeNoteHtml(text.innerHTML);
+        scheduleSave();
+      });
+      toolbar.appendChild(b);
+    });
+
+    const sep3 = document.createElement("span"); sep3.className = "note-tool-sep"; toolbar.appendChild(sep3);
+
+    // Font size stepper
+    const sizeDown = mkToolBtn("A−", "Smaller text", () => {
+      note.fontSize = Math.max(FONT_SIZE_MIN, note.fontSize - 1.5);
+      text.style.fontSize = `${note.fontSize}px`;
+      scheduleSave();
+    });
+    const sizeUp = mkToolBtn("A+", "Larger text", () => {
+      note.fontSize = Math.min(FONT_SIZE_MAX, note.fontSize + 1.5);
+      text.style.fontSize = `${note.fontSize}px`;
+      scheduleSave();
+    });
+    toolbar.appendChild(sizeDown);
+    toolbar.appendChild(sizeUp);
+
+    const sep4 = document.createElement("span"); sep4.className = "note-tool-sep"; toolbar.appendChild(sep4);
+
+    // Note paper color swatches
+    NOTE_PAPERS.forEach(p => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "note-swatch note-swatch--paper";
+      b.style.background = p.value;
+      b.title = `Note color: ${p.name}`;
+      b.addEventListener("mousedown", (ev) => ev.preventDefault());
+      b.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        note.bg = p.value;
+        el.style.background = p.value;
+        scheduleSave();
+      });
+      toolbar.appendChild(b);
+    });
+
+    el.appendChild(toolbar);
+
+    /* ------------------------------- Editable text ------------------------------- */
     const text = document.createElement("div");
     text.className = "note-text";
     text.contentEditable = "true";
-    text.style.color = note.color || currentColor;
-    text.textContent = note.text || "";
+    text.style.fontSize = `${note.fontSize}px`;
+    text.innerHTML = sanitizeNoteHtml(note.html);
     text.addEventListener("input", () => {
-      note.text = text.textContent;
+      note.html = sanitizeNoteHtml(text.innerHTML);
       scheduleSave();
+    });
+    text.addEventListener("focus", () => { el.classList.add("note-active"); bringToFront(); });
+    text.addEventListener("blur", () => {
+      // Delay so a click on the toolbar (which steals focus momentarily)
+      // doesn't immediately hide itself before the command runs.
+      setTimeout(() => { if (!el.contains(document.activeElement)) el.classList.remove("note-active"); }, 150);
     });
     // Prevent the drawing canvas (or note dragging) from stealing clicks
     // meant for text editing.
     text.addEventListener("pointerdown", (ev) => ev.stopPropagation());
     el.appendChild(text);
 
-    // Dragging: pointerdown anywhere on the note *except* the editable text
-    // or delete button repositions it. Position stored back as percentages.
+    /* ------------------------------- Dragging ------------------------------- */
+    // Pointerdown anywhere on the note *except* the editable text, toolbar,
+    // delete button, or resize handle repositions it. Stored as percentages
+    // so it stays aligned with the calendar beneath it on any viewport size.
     let dragging = false, startX = 0, startY = 0, startLeftPct = 0, startTopPct = 0;
     el.addEventListener("pointerdown", (ev) => {
-      if (ev.target === text || ev.target === del) return;
+      if (ev.target === text || ev.target === del || toolbar.contains(ev.target)) return;
+      if (ev.target.classList && ev.target.classList.contains("note-resize-handle")) return;
       dragging = true;
+      bringToFront();
       el.classList.add("dragging");
       el.setPointerCapture(ev.pointerId);
       const wrapRect = canvasWrap.getBoundingClientRect();
@@ -609,7 +823,7 @@
       el.style.left = `${note.xPct}%`;
       el.style.top = `${note.yPct}%`;
     });
-    const endDrag = (ev) => {
+    const endDrag = () => {
       if (!dragging) return;
       dragging = false;
       el.classList.remove("dragging");
@@ -618,7 +832,48 @@
     el.addEventListener("pointerup", endDrag);
     el.addEventListener("pointercancel", endDrag);
 
+    /* ------------------------------- Resizing ------------------------------- */
+    const handle = document.createElement("div");
+    handle.className = "note-resize-handle";
+    handle.title = "Drag to resize";
+    let resizing = false, resizeStartX = 0, resizeStartY = 0, startW = 0, startH = 0;
+    handle.addEventListener("pointerdown", (ev) => {
+      ev.stopPropagation();
+      resizing = true;
+      bringToFront();
+      handle.setPointerCapture(ev.pointerId);
+      resizeStartX = ev.clientX; resizeStartY = ev.clientY;
+      startW = el.offsetWidth; startH = el.offsetHeight;
+    });
+    handle.addEventListener("pointermove", (ev) => {
+      if (!resizing) return;
+      const newW = Math.max(120, Math.min(680, startW + (ev.clientX - resizeStartX)));
+      const newH = Math.max(50, Math.min(680, startH + (ev.clientY - resizeStartY)));
+      note.widthPx = newW;
+      note.heightPx = newH;
+      el.style.width = `${newW}px`;
+      el.style.height = `${newH}px`;
+    });
+    const endResize = (ev) => {
+      if (!resizing) return;
+      resizing = false;
+      if (handle.hasPointerCapture(ev.pointerId)) handle.releasePointerCapture(ev.pointerId);
+      scheduleSave();
+    };
+    handle.addEventListener("pointerup", endResize);
+    handle.addEventListener("pointercancel", endResize);
+    el.appendChild(handle);
+
     return el;
+  }
+
+  /** Escapes plain text for safe insertion as HTML — used only as a
+   *  one-time upgrade path for notes saved before rich formatting existed
+   *  (note.text without note.html). */
+  function escapeHtml(str) {
+    const div = document.createElement("div");
+    div.textContent = str;
+    return div.innerHTML;
   }
 
   function rebuildNotesDOM() {
@@ -632,7 +887,11 @@
     const rect = canvasWrap.getBoundingClientRect();
     const xPct = ((e.clientX - rect.left) / rect.width) * 100;
     const yPct = ((e.clientY - rect.top) / rect.height) * 100;
-    const note = { id: uid(), xPct, yPct, widthPx: 180, text: "", color: currentColor };
+    pushHistorySnapshot();
+    const note = {
+      id: uid(), xPct, yPct, widthPx: 180, heightPx: null,
+      html: "", color: currentColor, bg: NOTE_PAPERS[0].value, fontSize: FONT_SIZE_DEFAULT,
+    };
     monthState.notes.push(note);
     const el = createNoteElement(note);
     notesLayer.appendChild(el);
@@ -686,7 +945,8 @@
 
   clearBtn.addEventListener("click", () => {
     if (currentMonth === null) return;
-    if (!confirm(`Clear all ink and notes from ${MONTH_NAMES[currentMonth]}? This can't be undone.`)) return;
+    if (!confirm(`Clear all ink and notes from ${MONTH_NAMES[currentMonth]}? You can still undo this with the Undo button.`)) return;
+    pushHistorySnapshot();
     monthState = { strokes: [], notes: [] };
     redrawCanvas();
     rebuildNotesDOM();
@@ -694,7 +954,83 @@
   });
 
   /* ------------------------------------------------------------------ *
-   * 9. AUTO-SAVE — zero manual save buttons
+   * 9. HISTORY — per-month undo / redo
+   *    Snapshot-based: before each meaningful mutation (a completed stroke,
+   *    a note being added/deleted, or a full Clear) we push a deep clone of
+   *    monthState onto a history stack. Undo pops that snapshot back in;
+   *    Redo replays it forward. Continuous edits (typing inside a note,
+   *    dragging a note) are intentionally NOT snapshotted individually —
+   *    only the discrete action that started them — so undo stays coarse
+   *    and predictable rather than firing on every keystroke.
+   *    History is kept in memory only and resets whenever a different
+   *    month is opened; it is not persisted.
+   * ------------------------------------------------------------------ */
+  const MAX_HISTORY = 50;
+  let historyStack = [];
+  let redoStack = [];
+
+  const cloneState = (state) => JSON.parse(JSON.stringify(state));
+
+  function pushHistorySnapshot() {
+    if (currentMonth === null) return;
+    historyStack.push(cloneState(monthState));
+    if (historyStack.length > MAX_HISTORY) historyStack.shift();
+    redoStack = []; // a fresh action invalidates any previously undone redo path
+    updateHistoryButtons();
+  }
+
+  function resetHistory() {
+    historyStack = [];
+    redoStack = [];
+    updateHistoryButtons();
+  }
+
+  function undo() {
+    if (historyStack.length === 0) return;
+    redoStack.push(cloneState(monthState));
+    monthState = historyStack.pop();
+    redrawCanvas();
+    rebuildNotesDOM();
+    scheduleSave();
+    updateHistoryButtons();
+  }
+
+  function redo() {
+    if (redoStack.length === 0) return;
+    historyStack.push(cloneState(monthState));
+    monthState = redoStack.pop();
+    redrawCanvas();
+    rebuildNotesDOM();
+    scheduleSave();
+    updateHistoryButtons();
+  }
+
+  const undoBtn = document.getElementById("undoBtn");
+  const redoBtn = document.getElementById("redoBtn");
+
+  function updateHistoryButtons() {
+    undoBtn.disabled = historyStack.length === 0;
+    redoBtn.disabled = redoStack.length === 0;
+  }
+
+  undoBtn.addEventListener("click", undo);
+  redoBtn.addEventListener("click", redo);
+
+  // Keyboard shortcuts: Ctrl/Cmd+Z to undo, Ctrl/Cmd+Shift+Z (or Ctrl+Y) to redo.
+  // Ignored while a note is actively being edited so it doesn't fight the
+  // browser's native text-field undo.
+  document.addEventListener("keydown", (e) => {
+    if (currentMonth === null) return;
+    const editingText = document.activeElement && document.activeElement.classList.contains("note-text");
+    if (editingText) return;
+    const mod = e.ctrlKey || e.metaKey;
+    if (!mod) return;
+    if (e.key.toLowerCase() === "z" && !e.shiftKey) { e.preventDefault(); undo(); }
+    else if ((e.key.toLowerCase() === "z" && e.shiftKey) || e.key.toLowerCase() === "y") { e.preventDefault(); redo(); }
+  });
+
+  /* ------------------------------------------------------------------ *
+   * 10. AUTO-SAVE — zero manual save buttons
    *    - Debounced background save fires ~700ms after the last edit.
    *    - Immediate (flushed) save on: leaving to the overview, tab hidden,
    *      and window/tab close (beforeunload).
@@ -739,12 +1075,129 @@
   });
 
   /* ------------------------------------------------------------------ *
-   * 10. INIT
+   * 11. EXPORT / IMPORT — whole-year JSON backup & restore
+   *    IndexedDB lives only in this browser profile: clearing site data,
+   *    switching browsers/devices, or a corrupted profile means total
+   *    loss with no recovery path. Export serializes every saved month
+   *    into one downloadable .json file; Import restores from that file.
+   * ------------------------------------------------------------------ */
+  const exportBtn  = document.getElementById("exportBtn");
+  const importBtn  = document.getElementById("importBtn");
+  const importFile = document.getElementById("importFile");
+
+  async function exportYearToFile() {
+    const keys = await idbGetAllKeys();
+    const months = {};
+    for (const key of keys) {
+      const data = await idbGet(key);
+      if (data) months[key] = data;
+    }
+    const payload = { app: "diary-calendar", year: YEAR, exportedAt: new Date().toISOString(), months };
+
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `diary-calendar-${YEAR}-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  async function importYearFromFile(file) {
+    let payload;
+    try {
+      payload = JSON.parse(await file.text());
+    } catch (e) {
+      alert("That file doesn't look like a valid diary backup (couldn't parse JSON).");
+      return;
+    }
+    if (!payload || typeof payload.months !== "object") {
+      alert("That file doesn't look like a valid diary backup (missing month data).");
+      return;
+    }
+    const incomingKeys = Object.keys(payload.months);
+    if (incomingKeys.length === 0) {
+      alert("That backup file doesn't contain any month entries.");
+      return;
+    }
+    const proceed = confirm(
+      `This will overwrite ${incomingKeys.length} month(s) of existing entries with data from the backup file. Continue?`
+    );
+    if (!proceed) return;
+
+    for (const key of incomingKeys) {
+      await idbSet(key, payload.months[key]);
+    }
+
+    // If the month currently open was just overwritten, reload it live.
+    if (currentMonth !== null && incomingKeys.includes(monthKey(currentMonth))) {
+      await openWorkspace(currentMonth);
+    }
+    refreshContentDots();
+    checkStorageHealth();
+    alert("Backup imported successfully.");
+  }
+
+  exportBtn.addEventListener("click", exportYearToFile);
+  importBtn.addEventListener("click", () => importFile.click());
+  importFile.addEventListener("change", async () => {
+    const file = importFile.files && importFile.files[0];
+    importFile.value = ""; // allow re-selecting the same file later
+    if (file) await importYearFromFile(file);
+  });
+
+  /* ------------------------------------------------------------------ *
+   * 12. STORAGE HEALTH — persistent-storage request + quota warning
+   *    - Requests "persistent" storage so the browser is less likely to
+   *      silently evict this diary's data under disk pressure.
+   *    - Periodically checks how full the storage quota is and shows a
+   *      dismissible banner nudging the user to export a backup before
+   *      they lose the ability to save new entries.
+   * ------------------------------------------------------------------ */
+  const storageWarningEl = document.getElementById("storageWarning");
+  const storageWarningTextEl = document.getElementById("storageWarningText");
+
+  async function requestPersistentStorage() {
+    try {
+      if (navigator.storage && navigator.storage.persist) {
+        await navigator.storage.persist();
+      }
+    } catch (e) { /* not critical — best effort only */ }
+  }
+
+  async function checkStorageHealth() {
+    try {
+      if (!navigator.storage || !navigator.storage.estimate) return;
+      const { usage, quota } = await navigator.storage.estimate();
+      if (!quota) return;
+      const ratio = usage / quota;
+      if (ratio > 0.8) {
+        const pct = Math.round(ratio * 100);
+        storageWarningTextEl.textContent =
+          `Storage is ${pct}% full. Export a backup soon so you don't lose new entries.`;
+        storageWarningEl.classList.remove("hidden");
+      } else {
+        storageWarningEl.classList.add("hidden");
+      }
+    } catch (e) { /* best effort only */ }
+  }
+
+  document.getElementById("storageWarningDismiss").addEventListener("click", () => {
+    storageWarningEl.classList.add("hidden");
+  });
+
+  /* ------------------------------------------------------------------ *
+   * 13. INIT
    * ------------------------------------------------------------------ */
   function init() {
     renderHome();
     refreshContentDots();
     setMode("pen");
+    updateHistoryButtons();
+    requestPersistentStorage();
+    checkStorageHealth();
   }
 
   document.addEventListener("DOMContentLoaded", init);
